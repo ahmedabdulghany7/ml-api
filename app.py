@@ -1,6 +1,6 @@
 """
 MNIST Digit Classification API
-Flask application for serving digit recognition predictions (Keras CNN)
+Flask application with SMART MODEL LOADING
 """
 
 from flask import Flask, request, jsonify, render_template_string
@@ -9,41 +9,102 @@ import os
 import base64
 from io import BytesIO
 
-# Keras / TensorFlow
-from keras.models import load_model
-
 app = Flask(__name__)
 
-# =========================
-# Load Keras CNN model
-# =========================
 MODEL_PATH = "mnist_cnn_model.keras"
+model = None
 
+def train_model():
+    """Train MNIST CNN model from scratch"""
+    from keras.models import Sequential
+    from keras.layers import Dense, Conv2D, Flatten, MaxPool2D
+    from keras.datasets import mnist
+    from keras.utils import to_categorical
+    
+    print("🚀 Training new model...")
+    
+    (X_train, y_train), (X_test, y_test) = mnist.load_data()
+    X_train = X_train.reshape(-1, 28, 28, 1).astype('float32') / 255.0
+    X_test = X_test.reshape(-1, 28, 28, 1).astype('float32') / 255.0
+    y_train = to_categorical(y_train, 10)
+    y_test = to_categorical(y_test, 10)
+    
+    model = Sequential([
+        Conv2D(32, (3, 3), activation='relu', input_shape=(28, 28, 1)),
+        MaxPool2D((2, 2)),
+        Conv2D(64, (3, 3), activation='relu'),
+        MaxPool2D((2, 2)),
+        Flatten(),
+        Dense(128, activation='relu'),
+        Dense(10, activation='softmax')
+    ])
+    
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+    
+    print("🏋️ Training (3 epochs)...")
+    model.fit(X_train, y_train, validation_data=(X_test, y_test), 
+              epochs=3, batch_size=128, verbose=1)
+    
+    try:
+        model.save(MODEL_PATH)
+        print(f"✅ Model saved to {MODEL_PATH}")
+    except Exception as e:
+        print(f"⚠️ Could not save model: {e}")
+    
+    return model
+
+def load_or_train_model():
+    """Smart model loading with fallback"""
+    global model
+    
+    # Try loading existing model
+    if os.path.exists(MODEL_PATH):
+        print(f"📂 Found model file: {MODEL_PATH}")
+        try:
+            # Try modern Keras 3.x loading
+            import keras
+            model = keras.models.load_model(MODEL_PATH)
+            print(f"✅ Model loaded with Keras {keras.__version__}")
+            return model
+        except Exception as e1:
+            print(f"⚠️ Keras 3.x loading failed: {e1}")
+            
+            try:
+                # Try legacy TensorFlow/Keras 2.x loading
+                from tensorflow import keras as tf_keras
+                model = tf_keras.models.load_model(MODEL_PATH)
+                print(f"✅ Model loaded with TensorFlow Keras")
+                return model
+            except Exception as e2:
+                print(f"⚠️ TensorFlow Keras loading failed: {e2}")
+                print("🔄 Will train new model...")
+    
+    # Train new model if loading failed or file doesn't exist
+    print("🆕 No compatible model found, training new one...")
+    model = train_model()
+    return model
+
+# Load model on startup
 try:
-    model = load_model(MODEL_PATH)
-    print(f"✅ Keras CNN model loaded successfully from {MODEL_PATH}")
-except FileNotFoundError:
-    print(f"❌ Model file not found at {MODEL_PATH}")
-    model = None
+    model = load_or_train_model()
+    if model is None:
+        raise Exception("Model loading/training failed")
 except Exception as e:
-    print(f"❌ Failed to load model from {MODEL_PATH}: {e}")
+    print(f"❌ CRITICAL ERROR: {e}")
     model = None
 
 
-# =========================
-# HTML template (same UI)
-# =========================
 HOME_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MNIST Digit Classifier API</title>
+    <title>MNIST Digit Classifier</title>
     <style>
         * { margin:0; padding:0; box-sizing:border-box; }
         body {
-            font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family:'Segoe UI', Tahoma, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             min-height:100vh; color:white; padding:20px;
         }
@@ -66,16 +127,15 @@ HOME_TEMPLATE = """
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color:white; border:none; padding:12px 25px; font-size:14px;
             border-radius:8px; cursor:pointer; font-weight:600;
-            transition: transform 0.2s, box-shadow 0.2s;
+            transition: transform 0.2s;
         }
-        button:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
+        button:hover { transform: translateY(-2px); }
         button.secondary { background: rgba(255,255,255,0.2); }
         .result { margin-top:20px; text-align:center; display:none; }
         .digit-result {
             font-size:5em; font-weight:bold;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             -webkit-background-clip:text; -webkit-text-fill-color:transparent;
-            background-clip:text;
         }
         .confidence { color:#888; margin-top:10px; }
         .probabilities { margin-top:20px; }
@@ -86,16 +146,6 @@ HOME_TEMPLATE = """
             border-radius:4px; transition: width 0.3s;
         }
         .prob-value { margin-left:10px; color:#888; font-size:0.9em; }
-        .api-docs { margin-top:30px; }
-        .api-docs h3 { margin-bottom:15px; }
-        code {
-            background: rgba(0,0,0,0.3); padding:3px 8px; border-radius:5px;
-            font-family:'Courier New', monospace;
-        }
-        pre {
-            background: rgba(0,0,0,0.3); padding:15px; border-radius:10px;
-            overflow-x:auto; margin:10px 0; font-size:0.9em;
-        }
     </style>
 </head>
 <body>
@@ -111,7 +161,6 @@ HOME_TEMPLATE = """
                     <button onclick="predict()">🔮 Predict</button>
                     <button class="secondary" onclick="clearCanvas()">🗑️ Clear</button>
                 </div>
-
                 <div id="result" class="result">
                     <div class="digit-result" id="digit"></div>
                     <div class="confidence" id="confidence"></div>
@@ -125,21 +174,6 @@ HOME_TEMPLATE = """
                 </div>
             </div>
         </div>
-
-        <div class="card api-docs">
-            <h3>📡 API Documentation</h3>
-            <p><strong>Endpoint:</strong> <code>POST /predict</code></p>
-            <p><strong>Request Body:</strong></p>
-            <pre>{
-  "pixels": [0.0, 0.0, ..., 0.5, 0.8, ...]  // 784 values (0-1 normalized)
-}</pre>
-            <p><strong>Response:</strong></p>
-            <pre>{
-  "digit": 5,
-  "confidence": 0.95,
-  "probabilities": {"0": 0.01, "1": 0.02, ..., "9": 0.01}
-}</pre>
-        </div>
     </div>
 
     <script>
@@ -152,28 +186,22 @@ HOME_TEMPLATE = """
         ctx.strokeStyle = 'black';
         ctx.lineWidth = 20;
         ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
 
-        canvas.addEventListener('mousedown', startDrawing);
+        canvas.addEventListener('mousedown', (e) => { isDrawing = true; draw(e); });
         canvas.addEventListener('mousemove', draw);
-        canvas.addEventListener('mouseup', stopDrawing);
-        canvas.addEventListener('mouseout', stopDrawing);
-
-        function startDrawing(e) { isDrawing = true; draw(e); }
+        canvas.addEventListener('mouseup', () => { isDrawing = false; ctx.beginPath(); });
+        canvas.addEventListener('mouseout', () => { isDrawing = false; ctx.beginPath(); });
 
         function draw(e) {
             if (!isDrawing) return;
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
-
             ctx.lineTo(x, y);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(x, y);
         }
-
-        function stopDrawing() { isDrawing = false; ctx.beginPath(); }
 
         function clearCanvas() {
             ctx.fillStyle = 'white';
@@ -194,11 +222,8 @@ HOME_TEMPLATE = """
             const pixels = [];
 
             for (let i = 0; i < imageData.data.length; i += 4) {
-                const r = imageData.data[i];
-                const g = imageData.data[i + 1];
-                const b = imageData.data[i + 2];
-                const gray = (r + g + b) / 3;
-                pixels.push((255 - gray) / 255); // invert (white->0, black->1)
+                const gray = (imageData.data[i] + imageData.data[i+1] + imageData.data[i+2]) / 3;
+                pixels.push((255 - gray) / 255);
             }
 
             try {
@@ -209,7 +234,7 @@ HOME_TEMPLATE = """
                 });
 
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.message || data.error || "Request failed");
+                if (!response.ok) throw new Error(data.message || "Failed");
 
                 document.getElementById('result').style.display = 'block';
                 document.getElementById('digit').textContent = data.digit;
@@ -219,11 +244,10 @@ HOME_TEMPLATE = """
                 let probHtml = '';
                 for (let i = 0; i < 10; i++) {
                     const prob = data.probabilities[String(i)] || 0;
-                    const width = prob * 100;
                     probHtml += `
                         <div class="prob-bar">
                             <span class="prob-label">${i}</span>
-                            <div class="prob-fill" style="width:${width}%"></div>
+                            <div class="prob-fill" style="width:${prob * 100}%"></div>
                             <span class="prob-value">${(prob * 100).toFixed(1)}%</span>
                         </div>
                     `;
@@ -234,58 +258,37 @@ HOME_TEMPLATE = """
                 alert('Error: ' + error.message);
             }
         }
-
-        window.predict = predict;
-        window.clearCanvas = clearCanvas;
     </script>
 </body>
 </html>
 """
 
-
-# =========================
-# Routes
-# =========================
 @app.route("/")
 def home():
     return render_template_string(HOME_TEMPLATE)
 
-
 @app.route("/health")
 def health():
     return jsonify({
-        "status": "healthy",
-        "model_loaded": model is not None,
-        "model_path": MODEL_PATH,
-        "model_type": "Keras CNN"
+        "status": "healthy" if model is not None else "unhealthy",
+        "model_loaded": model is not None
     })
-
 
 @app.route("/predict", methods=["POST"])
 def predict():
     if model is None:
-        return jsonify({
-            "error": "Model not loaded",
-            "message": f"Please ensure {MODEL_PATH} exists"
-        }), 500
+        return jsonify({"error": "Model not loaded"}), 500
 
     data = request.get_json(silent=True)
     if not data or "pixels" not in data:
-        return jsonify({
-            "error": "Invalid request",
-            "message": 'Please provide JSON with "pixels" array (784 values)'
-        }), 400
+        return jsonify({"error": "Invalid request"}), 400
 
     pixels = data["pixels"]
     if not isinstance(pixels, list) or len(pixels) != 784:
-        return jsonify({
-            "error": "Invalid pixels",
-            "message": f"Expected 784 pixel values, got {len(pixels) if isinstance(pixels, list) else 'invalid type'}"
-        }), 400
+        return jsonify({"error": f"Expected 784 pixels, got {len(pixels)}"}), 400
 
     try:
         x = np.array(pixels, dtype=np.float32).reshape(1, 28, 28, 1)
-
         probs = model.predict(x, verbose=0)[0]
         digit = int(np.argmax(probs))
         confidence = float(np.max(probs))
@@ -295,54 +298,8 @@ def predict():
             "confidence": confidence,
             "probabilities": {str(i): float(probs[i]) for i in range(10)}
         })
-
     except Exception as e:
-        return jsonify({"error": "Prediction failed", "message": str(e)}), 500
-
-
-@app.route("/predict_image", methods=["POST"])
-def predict_image():
-    if model is None:
-        return jsonify({"error": "Model not loaded"}), 500
-
-    data = request.get_json(silent=True)
-    if not data or "image" not in data:
-        return jsonify({
-            "error": "Invalid request",
-            "message": 'Please provide JSON with "image" field (base64 encoded)'
-        }), 400
-
-    try:
-        from PIL import Image
-
-        image_data = base64.b64decode(data["image"])
-        image = Image.open(BytesIO(image_data)).convert("L").resize((28, 28))
-
-        arr = np.array(image, dtype=np.float32) / 255.0
-
-        # invert if mostly white background
-        if arr.mean() > 0.5:
-            arr = 1.0 - arr
-
-        x = arr.reshape(1, 28, 28, 1)
-
-        probs = model.predict(x, verbose=0)[0]
-        digit = int(np.argmax(probs))
-
-        return jsonify({
-            "digit": digit,
-            "confidence": float(np.max(probs)),
-            "probabilities": {str(i): float(probs[i]) for i in range(10)}
-        })
-
-    except ImportError:
-        return jsonify({
-            "error": "PIL not installed",
-            "message": "pip install pillow (or use /predict with pixels)"
-        }), 500
-    except Exception as e:
-        return jsonify({"error": "Image prediction failed", "message": str(e)}), 500
-
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
