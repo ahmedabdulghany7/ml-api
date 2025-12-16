@@ -1,23 +1,92 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 import pickle
-import numpy as np
 import pandas as pd
 
 app = Flask(__name__)
 
-# Load the trained model
+try:
+    app.json.ensure_ascii = False  # Flask 2.2+
+except Exception:
+    app.config["JSON_AS_ASCII"] = False
+
 with open('titanic_model.pkl', 'rb') as file:
     model = pickle.load(file)
 
+HTML_HOME = """
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Titanic Survival Prediction API</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial;max-width:900px;margin:40px auto;padding:0 16px;line-height:1.5}
+    code,pre{background:#f6f8fa;padding:10px;border-radius:10px;display:block;overflow:auto}
+    .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;margin:14px 0}
+    .ok{color:#16a34a;font-weight:700}
+    .muted{color:#6b7280}
+  </style>
+</head>
+<body>
+  <h1>🚢 Titanic Survival Prediction API</h1>
+  <p class="ok">Status: Active</p>
+
+  <div class="card">
+    <h2>Endpoints</h2>
+    <ul>
+      <li><b>GET</b> / (this page)</li>
+      <li><b>GET</b> /api (API info as JSON)</li>
+      <li><b>GET</b> /health</li>
+      <li><b>POST</b> /predict</li>
+      <li><b>POST</b> /batch_predict</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Required Features</h2>
+    <ul>
+      <li>Pclass: int (1,2,3)</li>
+      <li>Sex: int (0=female, 1=male)</li>
+      <li>Age: float</li>
+      <li>SibSp: int</li>
+      <li>Parch: int</li>
+      <li>Fare: float</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Example Request (predict)</h2>
+    <pre>{
+  "Pclass": 3,
+  "Sex": 1,
+  "Age": 22,
+  "SibSp": 1,
+  "Parch": 0,
+  "Fare": 7.25
+}</pre>
+
+    <p class="muted">Tip: Use Postman / curl to send POST JSON.</p>
+    <code>curl -X POST {{base}}/predict -H "Content-Type: application/json" -d '{"Pclass":3,"Sex":1,"Age":22,"SibSp":1,"Parch":0,"Fare":7.25}'</code>
+  </div>
+</body>
+</html>
+"""
+
 @app.route('/')
 def home():
-    """Home endpoint with API information"""
+    base = request.host_url.rstrip("/")
+    return render_template_string(HTML_HOME, base=base)
+
+@app.route('/api')
+def api_info():
     return jsonify({
         'message': '🚢 Titanic Survival Prediction API',
         'status': 'active',
         'endpoints': {
-            '/': 'API information',
+            '/': 'HTML documentation page',
+            '/api': 'API information (JSON)',
             '/predict': 'POST - Make predictions',
+            '/batch_predict': 'POST - Batch predictions',
             '/health': 'Health check'
         },
         'required_features': {
@@ -40,7 +109,6 @@ def home():
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'model_loaded': model is not None
@@ -48,27 +116,18 @@ def health():
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """
-    Prediction endpoint
-    Accepts JSON with passenger features
-    Returns survival prediction and probability
-    """
     try:
-        # Get JSON data
-        data = request.get_json()
-        
-        # Validate required fields
+        data = request.get_json(force=True)
+
         required_fields = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare']
-        missing_fields = [field for field in required_fields if field not in data]
-        
+        missing_fields = [f for f in required_fields if f not in data]
         if missing_fields:
             return jsonify({
                 'error': 'Missing required fields',
                 'missing': missing_fields,
                 'required': required_fields
             }), 400
-        
-        # Create DataFrame with features in correct order
+
         features = pd.DataFrame([{
             'Pclass': data['Pclass'],
             'Sex': data['Sex'],
@@ -77,13 +136,11 @@ def predict():
             'Parch': data['Parch'],
             'Fare': data['Fare']
         }])
-        
-        # Make prediction
+
         prediction = model.predict(features)[0]
         probability = model.predict_proba(features)[0]
-        
-        # Prepare response
-        result = {
+
+        return jsonify({
             'success': True,
             'prediction': int(prediction),
             'survival_status': 'Survived' if prediction == 1 else 'Not Survived',
@@ -93,10 +150,8 @@ def predict():
             },
             'confidence': float(max(probability)),
             'input_data': data
-        }
-        
-        return jsonify(result)
-        
+        })
+
     except Exception as e:
         return jsonify({
             'success': False,
@@ -106,23 +161,22 @@ def predict():
 
 @app.route('/batch_predict', methods=['POST'])
 def batch_predict():
-    """
-    Batch prediction endpoint
-    Accepts JSON array of passengers
-    Returns predictions for all passengers
-    """
     try:
-        # Get JSON data
-        data = request.get_json()
-        
+        data = request.get_json(force=True)
+
         if not isinstance(data, list):
-            return jsonify({
-                'error': 'Data must be a list of passengers'
-            }), 400
-        
-        # Process each passenger
+            return jsonify({'error': 'Data must be a list of passengers'}), 400
+
         results = []
-        for idx, passenger in enumerate(data):
+        for idx, passenger in enumerate(data, start=1):
+            required_fields = ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare']
+            missing = [f for f in required_fields if f not in passenger]
+            if missing:
+                return jsonify({
+                    'error': f'Missing fields for passenger #{idx}',
+                    'missing': missing
+                }), 400
+
             features = pd.DataFrame([{
                 'Pclass': passenger['Pclass'],
                 'Sex': passenger['Sex'],
@@ -131,29 +185,27 @@ def batch_predict():
                 'Parch': passenger['Parch'],
                 'Fare': passenger['Fare']
             }])
-            
+
             prediction = model.predict(features)[0]
             probability = model.predict_proba(features)[0]
-            
+
             results.append({
-                'passenger_id': idx + 1,
+                'passenger_id': idx,
                 'prediction': int(prediction),
                 'survival_status': 'Survived' if prediction == 1 else 'Not Survived',
-                'probability': float(probability[1]),
+                'probability_survived': float(probability[1]),
                 'input_data': passenger
             })
-        
+
         return jsonify({
             'success': True,
             'total_passengers': len(results),
             'predictions': results
         })
-        
+
     except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
