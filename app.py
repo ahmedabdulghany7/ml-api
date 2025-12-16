@@ -12,12 +12,39 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-# Load the trained model
-MODEL_PATH = 'mnist_model.pkl'
+# =========================
+# Model loading (FIXED)
+# =========================
+MODEL_PATH = "mnist_model.pkl"
+
+
+def load_model_any(path: str):
+    """
+    Loads either:
+      - a scikit-learn model directly, OR
+      - a dict that contains the model under common keys (model/clf/pipeline/estimator)
+    """
+    obj = joblib.load(path)
+
+    # If saved as dict (artifacts), extract the actual model
+    if isinstance(obj, dict):
+        for key in ("model", "clf", "pipeline", "estimator"):
+            if key in obj:
+                extracted = obj[key]
+                return extracted
+        # No model found inside dict
+        raise ValueError(
+            f"Loaded a dict from {path} but couldn't find a model under keys "
+            f"['model','clf','pipeline','estimator']. Found keys: {list(obj.keys())}"
+        )
+
+    # Otherwise it is the model itself
+    return obj
+
 
 try:
-    model = joblib.load(MODEL_PATH)
-    print(f"✅ Model loaded successfully from {MODEL_PATH} ({type(model)})")
+    model = load_model_any(MODEL_PATH)
+    print(f"✅ Model loaded successfully from {MODEL_PATH}: {type(model)}")
 except FileNotFoundError:
     print(f"❌ Model file not found at {MODEL_PATH}")
     model = None
@@ -26,6 +53,9 @@ except Exception as e:
     model = None
 
 
+# =========================
+# Helpers
+# =========================
 def _softmax(x: np.ndarray) -> np.ndarray:
     """Numerically stable softmax for converting logits to probabilities."""
     x = x - np.max(x, axis=1, keepdims=True)
@@ -35,34 +65,52 @@ def _softmax(x: np.ndarray) -> np.ndarray:
 
 def predict_with_probs(pixel_array_784: np.ndarray):
     """
+    pixel_array_784: shape (1, 784)
     Returns:
         pred_digit: int
         probs: np.ndarray shape (10,)
     """
-    # pixel_array_784 should be shape (1, 784)
     pred = model.predict(pixel_array_784)[0]
     pred_digit = int(pred)
 
-    # If model supports predict_proba (best case)
+    # Best case: sklearn predict_proba
     if hasattr(model, "predict_proba"):
         probs = model.predict_proba(pixel_array_784)[0]
         probs = np.asarray(probs, dtype=np.float64)
+
+        # Sometimes models trained on subset of classes -> pad to 10 if needed
+        if probs.shape[0] != 10 and hasattr(model, "classes_"):
+            full = np.zeros(10, dtype=np.float64)
+            for cls, p in zip(model.classes_, probs):
+                full[int(cls)] = float(p)
+            probs = full
+
         return pred_digit, probs
 
-    # If model supports decision_function (convert to softmax)
+    # If decision_function exists, convert logits to probabilities
     if hasattr(model, "decision_function"):
         logits = model.decision_function(pixel_array_784)
         logits = np.asarray(logits, dtype=np.float64)
         probs = _softmax(logits)[0]
+
+        # Same pad logic if needed
+        if probs.shape[0] != 10 and hasattr(model, "classes_"):
+            full = np.zeros(10, dtype=np.float64)
+            for idx, cls in enumerate(model.classes_):
+                full[int(cls)] = float(probs[idx])
+            probs = full
+
         return pred_digit, probs
 
-    # Fallback: make a one-hot "probability"
+    # Fallback: one-hot
     probs = np.zeros(10, dtype=np.float64)
     probs[pred_digit] = 1.0
     return pred_digit, probs
 
 
-# HTML template for the home page
+# =========================
+# HTML template
+# =========================
 HOME_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -243,8 +291,7 @@ HOME_TEMPLATE = """
                 const g = imageData.data[i + 1];
                 const b = imageData.data[i + 2];
                 const gray = (r + g + b) / 3;
-                // invert: white bg -> 0, black ink -> 1
-                pixels.push((255 - gray) / 255);
+                pixels.push((255 - gray) / 255); // invert: white->0, black->1
             }
 
             try {
@@ -262,7 +309,7 @@ HOME_TEMPLATE = """
                 document.getElementById('confidence').textContent =
                     `Confidence: ${(data.confidence * 100).toFixed(1)}%`;
 
-                // IMPORTANT FIX: probabilities keys are strings "0".."9"
+                // probabilities keys are strings "0".."9"
                 let probHtml = '';
                 for (let i = 0; i < 10; i++) {
                     const prob = data.probabilities[String(i)] || 0;
@@ -287,76 +334,80 @@ HOME_TEMPLATE = """
 """
 
 
-@app.route('/')
+@app.route("/")
 def home():
     return render_template_string(HOME_TEMPLATE)
 
 
-@app.route('/health')
+@app.route("/health")
 def health():
     return jsonify({
-        'status': 'healthy',
-        'model_loaded': model is not None,
-        'model_path': MODEL_PATH,
-        'model_type': str(type(model)) if model is not None else None
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "model_path": MODEL_PATH,
+        "model_type": str(type(model)) if model is not None else None
     })
 
 
-@app.route('/predict', methods=['POST'])
+@app.route("/predict", methods=["POST"])
 def predict():
     if model is None:
-        return jsonify({'error': 'Model not loaded', 'message': f'Please ensure {MODEL_PATH} exists'}), 500
+        return jsonify({
+            "error": "Model not loaded",
+            "message": f"Please ensure {MODEL_PATH} exists and contains a sklearn model (or dict with model key)."
+        }), 500
 
     data = request.get_json(silent=True)
+    if not data or "pixels" not in data:
+        return jsonify({
+            "error": "Invalid request",
+            "message": 'Please provide JSON with "pixels" array (784 values)'
+        }), 400
 
-    if not data or 'pixels' not in data:
-        return jsonify({'error': 'Invalid request', 'message': 'Please provide JSON with "pixels" array (784 values)'}), 400
-
-    pixels = data['pixels']
-
+    pixels = data["pixels"]
     if not isinstance(pixels, list) or len(pixels) != 784:
-        return jsonify({'error': 'Invalid pixels', 'message': f'Expected 784 pixel values, got {len(pixels) if isinstance(pixels, list) else "invalid type"}'}), 400
+        return jsonify({
+            "error": "Invalid pixels",
+            "message": f"Expected 784 pixel values, got {len(pixels) if isinstance(pixels, list) else 'invalid type'}"
+        }), 400
 
     try:
-        # (1, 784) for sklearn model
         pixel_array = np.array(pixels, dtype=np.float32).reshape(1, 784)
 
         digit, probs = predict_with_probs(pixel_array)
         confidence = float(np.max(probs))
 
         return jsonify({
-            'digit': int(digit),
-            'confidence': confidence,
-            'probabilities': {str(i): float(probs[i]) for i in range(10)}
+            "digit": int(digit),
+            "confidence": confidence,
+            "probabilities": {str(i): float(probs[i]) for i in range(10)}
         })
 
     except Exception as e:
-        return jsonify({'error': 'Prediction failed', 'message': str(e)}), 500
+        return jsonify({"error": "Prediction failed", "message": str(e)}), 500
 
 
-@app.route('/predict_image', methods=['POST'])
+@app.route("/predict_image", methods=["POST"])
 def predict_image():
     if model is None:
-        return jsonify({'error': 'Model not loaded'}), 500
+        return jsonify({"error": "Model not loaded"}), 500
 
     data = request.get_json(silent=True)
-
-    if not data or 'image' not in data:
-        return jsonify({'error': 'Invalid request', 'message': 'Please provide JSON with "image" field (base64 encoded)'}), 400
+    if not data or "image" not in data:
+        return jsonify({
+            "error": "Invalid request",
+            "message": 'Please provide JSON with "image" field (base64 encoded)'
+        }), 400
 
     try:
         from PIL import Image
 
-        image_data = base64.b64decode(data['image'])
-        image = Image.open(BytesIO(image_data))
+        image_data = base64.b64decode(data["image"])
+        image = Image.open(BytesIO(image_data)).convert("L").resize((28, 28))
 
-        # Convert to grayscale and resize
-        image = image.convert('L').resize((28, 28))
-
-        # Normalize to [0,1]
         pixels = np.array(image, dtype=np.float32).flatten() / 255.0
 
-        # If background is mostly white, invert so ink becomes 1
+        # if background mostly white -> invert
         if pixels.mean() > 0.5:
             pixels = 1.0 - pixels
 
@@ -366,17 +417,20 @@ def predict_image():
         confidence = float(np.max(probs))
 
         return jsonify({
-            'digit': int(digit),
-            'confidence': confidence,
-            'probabilities': {str(i): float(probs[i]) for i in range(10)}
+            "digit": int(digit),
+            "confidence": confidence,
+            "probabilities": {str(i): float(probs[i]) for i in range(10)}
         })
 
     except ImportError:
-        return jsonify({'error': 'PIL not installed', 'message': 'pip install pillow (or use /predict with pixels)'}), 500
+        return jsonify({
+            "error": "PIL not installed",
+            "message": "pip install pillow (or use /predict with pixels)"
+        }), 500
     except Exception as e:
-        return jsonify({'error': 'Image prediction failed', 'message': str(e)}), 500
+        return jsonify({"error": "Image prediction failed", "message": str(e)}), 500
 
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
