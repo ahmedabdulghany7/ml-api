@@ -17,10 +17,49 @@ MODEL_PATH = 'mnist_model.pkl'
 
 try:
     model = joblib.load(MODEL_PATH)
-    print(f"Model loaded successfully from {MODEL_PATH}")
+    print(f"✅ Model loaded successfully from {MODEL_PATH} ({type(model)})")
 except FileNotFoundError:
-    print(f"Model file not found at {MODEL_PATH}")
+    print(f"❌ Model file not found at {MODEL_PATH}")
     model = None
+except Exception as e:
+    print(f"❌ Failed to load model from {MODEL_PATH}: {e}")
+    model = None
+
+
+def _softmax(x: np.ndarray) -> np.ndarray:
+    """Numerically stable softmax for converting logits to probabilities."""
+    x = x - np.max(x, axis=1, keepdims=True)
+    exp = np.exp(x)
+    return exp / np.sum(exp, axis=1, keepdims=True)
+
+
+def predict_with_probs(pixel_array_784: np.ndarray):
+    """
+    Returns:
+        pred_digit: int
+        probs: np.ndarray shape (10,)
+    """
+    # pixel_array_784 should be shape (1, 784)
+    pred = model.predict(pixel_array_784)[0]
+    pred_digit = int(pred)
+
+    # If model supports predict_proba (best case)
+    if hasattr(model, "predict_proba"):
+        probs = model.predict_proba(pixel_array_784)[0]
+        probs = np.asarray(probs, dtype=np.float64)
+        return pred_digit, probs
+
+    # If model supports decision_function (convert to softmax)
+    if hasattr(model, "decision_function"):
+        logits = model.decision_function(pixel_array_784)
+        logits = np.asarray(logits, dtype=np.float64)
+        probs = _softmax(logits)[0]
+        return pred_digit, probs
+
+    # Fallback: make a one-hot "probability"
+    probs = np.zeros(10, dtype=np.float64)
+    probs[pred_digit] = 1.0
+    return pred_digit, probs
 
 
 # HTML template for the home page
@@ -32,141 +71,60 @@ HOME_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MNIST Digit Classifier API</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin:0; padding:0; box-sizing:border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            color: white;
-            padding: 20px;
+            min-height:100vh; color:white; padding:20px;
         }
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-        h1 {
-            text-align: center;
-            margin-bottom: 10px;
-            font-size: 2.5em;
-        }
-        .subtitle {
-            text-align: center;
-            color: #888;
-            margin-bottom: 30px;
-        }
-        .main-content {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-        }
-        @media (max-width: 768px) {
-            .main-content {
-                grid-template-columns: 1fr;
-            }
-        }
+        .container { max-width:900px; margin:0 auto; }
+        h1 { text-align:center; margin-bottom:10px; font-size:2.5em; }
+        .subtitle { text-align:center; color:#888; margin-bottom:30px; }
+        .main-content { display:grid; grid-template-columns:1fr 1fr; gap:30px; }
+        @media (max-width:768px) { .main-content { grid-template-columns:1fr; } }
         .card {
             background: rgba(255,255,255,0.1);
-            border-radius: 20px;
-            padding: 25px;
-            backdrop-filter: blur(10px);
+            border-radius:20px; padding:25px; backdrop-filter: blur(10px);
         }
-        .card h2 {
-            margin-bottom: 20px;
-            font-size: 1.3em;
-        }
+        .card h2 { margin-bottom:20px; font-size:1.3em; }
         canvas {
-            background: white;
-            border-radius: 10px;
-            cursor: crosshair;
-            display: block;
-            margin: 0 auto 20px;
+            background:white; border-radius:10px; cursor:crosshair;
+            display:block; margin:0 auto 20px;
         }
-        .btn-group {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-        }
+        .btn-group { display:flex; gap:10px; justify-content:center; }
         button {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            padding: 12px 25px;
-            font-size: 14px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
+            color:white; border:none; padding:12px 25px; font-size:14px;
+            border-radius:8px; cursor:pointer; font-weight:600;
             transition: transform 0.2s, box-shadow 0.2s;
         }
-        button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
-        }
-        button.secondary {
-            background: rgba(255,255,255,0.2);
-        }
-        .result {
-            margin-top: 20px;
-            text-align: center;
-            display: none;
-        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(102,126,234,0.4); }
+        button.secondary { background: rgba(255,255,255,0.2); }
+        .result { margin-top:20px; text-align:center; display:none; }
         .digit-result {
-            font-size: 5em;
-            font-weight: bold;
+            font-size:5em; font-weight:bold;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+            background-clip:text;
         }
-        .confidence {
-            color: #888;
-            margin-top: 10px;
-        }
-        .probabilities {
-            margin-top: 20px;
-        }
-        .prob-bar {
-            display: flex;
-            align-items: center;
-            margin: 5px 0;
-        }
-        .prob-label {
-            width: 30px;
-            font-weight: bold;
-        }
+        .confidence { color:#888; margin-top:10px; }
+        .probabilities { margin-top:20px; }
+        .prob-bar { display:flex; align-items:center; margin:5px 0; }
+        .prob-label { width:30px; font-weight:bold; }
         .prob-fill {
-            height: 20px;
-            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-            border-radius: 4px;
-            transition: width 0.3s;
+            height:20px; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            border-radius:4px; transition: width 0.3s;
         }
-        .prob-value {
-            margin-left: 10px;
-            color: #888;
-            font-size: 0.9em;
-        }
-        .api-docs {
-            margin-top: 30px;
-        }
-        .api-docs h3 {
-            margin-bottom: 15px;
-        }
+        .prob-value { margin-left:10px; color:#888; font-size:0.9em; }
+        .api-docs { margin-top:30px; }
+        .api-docs h3 { margin-bottom:15px; }
         code {
-            background: rgba(0,0,0,0.3);
-            padding: 3px 8px;
-            border-radius: 5px;
-            font-family: 'Courier New', monospace;
+            background: rgba(0,0,0,0.3); padding:3px 8px; border-radius:5px;
+            font-family:'Courier New', monospace;
         }
         pre {
-            background: rgba(0,0,0,0.3);
-            padding: 15px;
-            border-radius: 10px;
-            overflow-x: auto;
-            margin: 10px 0;
-            font-size: 0.9em;
+            background: rgba(0,0,0,0.3); padding:15px; border-radius:10px;
+            overflow-x:auto; margin:10px 0; font-size:0.9em;
         }
     </style>
 </head>
@@ -174,7 +132,7 @@ HOME_TEMPLATE = """
     <div class="container">
         <h1>🔢 MNIST Digit Classifier</h1>
         <p class="subtitle">Draw a digit (0-9) and let AI predict it!</p>
-        
+
         <div class="main-content">
             <div class="card">
                 <h2>✏️ Draw a Digit</h2>
@@ -183,21 +141,21 @@ HOME_TEMPLATE = """
                     <button onclick="predict()">🔮 Predict</button>
                     <button class="secondary" onclick="clearCanvas()">🗑️ Clear</button>
                 </div>
-                
+
                 <div id="result" class="result">
                     <div class="digit-result" id="digit"></div>
                     <div class="confidence" id="confidence"></div>
                 </div>
             </div>
-            
+
             <div class="card">
                 <h2>📊 Prediction Probabilities</h2>
                 <div id="probabilities" class="probabilities">
-                    <p style="color: #888; text-align: center;">Draw a digit to see probabilities</p>
+                    <p style="color:#888; text-align:center;">Draw a digit to see probabilities</p>
                 </div>
             </div>
         </div>
-        
+
         <div class="card api-docs">
             <h3>📡 API Documentation</h3>
             <p><strong>Endpoint:</strong> <code>POST /predict</code></p>
@@ -213,12 +171,12 @@ HOME_TEMPLATE = """
 }</pre>
         </div>
     </div>
-    
+
     <script>
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         let isDrawing = false;
-        
+
         // Initialize canvas
         ctx.fillStyle = 'white';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -226,36 +184,29 @@ HOME_TEMPLATE = """
         ctx.lineWidth = 20;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-        
-        // Mouse events
+
         canvas.addEventListener('mousedown', startDrawing);
         canvas.addEventListener('mousemove', draw);
         canvas.addEventListener('mouseup', stopDrawing);
         canvas.addEventListener('mouseout', stopDrawing);
-        
-        // Touch events for mobile
+
         canvas.addEventListener('touchstart', handleTouch);
         canvas.addEventListener('touchmove', handleTouch);
         canvas.addEventListener('touchend', stopDrawing);
-        
-        function startDrawing(e) {
-            isDrawing = true;
-            draw(e);
-        }
-        
+
+        function startDrawing(e) { isDrawing = true; draw(e); }
+
         function draw(e) {
             if (!isDrawing) return;
-            
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
-            
             ctx.lineTo(x, y);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(x, y);
         }
-        
+
         function handleTouch(e) {
             e.preventDefault();
             const touch = e.touches[0];
@@ -265,74 +216,67 @@ HOME_TEMPLATE = """
             );
             canvas.dispatchEvent(mouseEvent);
         }
-        
-        function stopDrawing() {
-            isDrawing = false;
-            ctx.beginPath();
-        }
-        
+
+        function stopDrawing() { isDrawing = false; ctx.beginPath(); }
+
         function clearCanvas() {
             ctx.fillStyle = 'white';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             document.getElementById('result').style.display = 'none';
-            document.getElementById('probabilities').innerHTML = 
-                '<p style="color: #888; text-align: center;">Draw a digit to see probabilities</p>';
+            document.getElementById('probabilities').innerHTML =
+                '<p style="color:#888; text-align:center;">Draw a digit to see probabilities</p>';
         }
-        
+
         async function predict() {
-            // Resize canvas to 28x28
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = 28;
             tempCanvas.height = 28;
             const tempCtx = tempCanvas.getContext('2d');
-            
-            // Draw resized image
+
             tempCtx.drawImage(canvas, 0, 0, 28, 28);
-            
-            // Get pixel data
+
             const imageData = tempCtx.getImageData(0, 0, 28, 28);
             const pixels = [];
-            
+
             for (let i = 0; i < imageData.data.length; i += 4) {
-                // Convert RGB to grayscale (inverted for black-on-white drawing)
                 const r = imageData.data[i];
                 const g = imageData.data[i + 1];
                 const b = imageData.data[i + 2];
                 const gray = (r + g + b) / 3;
-                // Invert: white background becomes 0, black drawing becomes 1
+                // invert: white bg -> 0, black ink -> 1
                 pixels.push((255 - gray) / 255);
             }
-            
+
             try {
                 const response = await fetch('/predict', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ pixels: pixels })
                 });
-                
+
                 const data = await response.json();
-                
-                // Show result
+                if (!response.ok) throw new Error(data.message || data.error || "Request failed");
+
                 document.getElementById('result').style.display = 'block';
                 document.getElementById('digit').textContent = data.digit;
-                document.getElementById('confidence').textContent = 
+                document.getElementById('confidence').textContent =
                     `Confidence: ${(data.confidence * 100).toFixed(1)}%`;
-                
-                // Show probabilities
+
+                // IMPORTANT FIX: probabilities keys are strings "0".."9"
                 let probHtml = '';
                 for (let i = 0; i < 10; i++) {
-                    const prob = data.probabilities[i] || 0;
+                    const prob = data.probabilities[String(i)] || 0;
                     const width = prob * 100;
                     probHtml += `
                         <div class="prob-bar">
                             <span class="prob-label">${i}</span>
-                            <div class="prob-fill" style="width: ${width}%"></div>
+                            <div class="prob-fill" style="width:${width}%"></div>
                             <span class="prob-value">${(prob * 100).toFixed(1)}%</span>
                         </div>
                     `;
                 }
                 document.getElementById('probabilities').innerHTML = probHtml;
-                
+
             } catch (error) {
                 alert('Error: ' + error.message);
             }
@@ -345,140 +289,92 @@ HOME_TEMPLATE = """
 
 @app.route('/')
 def home():
-    """Serve the home page with interactive drawing UI"""
     return render_template_string(HOME_TEMPLATE)
 
 
 @app.route('/health')
 def health():
-    """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
         'model_loaded': model is not None,
-        'model_type': 'MNIST Digit Classifier'
+        'model_path': MODEL_PATH,
+        'model_type': str(type(model)) if model is not None else None
     })
 
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    """
-    Prediction endpoint for digit classification
-    
-    Request JSON:
-        {"pixels": [0.0, 0.0, ..., 0.5, 0.8, ...]}  # 784 values (0-1 normalized)
-    
-    Response JSON:
-        {
-            "digit": 5,
-            "confidence": 0.95,
-            "probabilities": {"0": 0.01, ..., "9": 0.01}
-        }
-    """
     if model is None:
-        return jsonify({
-            'error': 'Model not loaded',
-            'message': 'Please ensure mnist_model.pkl exists'
-        }), 500
-    
-    data = request.get_json()
-    
+        return jsonify({'error': 'Model not loaded', 'message': f'Please ensure {MODEL_PATH} exists'}), 500
+
+    data = request.get_json(silent=True)
+
     if not data or 'pixels' not in data:
-        return jsonify({
-            'error': 'Invalid request',
-            'message': 'Please provide JSON with "pixels" array (784 values)'
-        }), 400
-    
+        return jsonify({'error': 'Invalid request', 'message': 'Please provide JSON with "pixels" array (784 values)'}), 400
+
     pixels = data['pixels']
-    
+
     if not isinstance(pixels, list) or len(pixels) != 784:
-        return jsonify({
-            'error': 'Invalid pixels',
-            'message': f'Expected 784 pixel values, got {len(pixels) if isinstance(pixels, list) else "invalid type"}'
-        }), 400
-    
+        return jsonify({'error': 'Invalid pixels', 'message': f'Expected 784 pixel values, got {len(pixels) if isinstance(pixels, list) else "invalid type"}'}), 400
+
     try:
-        # Convert to numpy array
-        pixel_array = np.array(pixels).reshape(1, -1)
-        
-        # Make prediction
-        prediction = model.predict(pixel_array)[0]
-        probabilities = model.predict_proba(pixel_array)[0]
-        confidence = float(max(probabilities))
-        
-        # Create probability dict
-        prob_dict = {str(i): float(p) for i, p in enumerate(probabilities)}
-        
+        # (1, 784) for sklearn model
+        pixel_array = np.array(pixels, dtype=np.float32).reshape(1, 784)
+
+        digit, probs = predict_with_probs(pixel_array)
+        confidence = float(np.max(probs))
+
         return jsonify({
-            'digit': int(prediction) if prediction.isdigit() else prediction,
+            'digit': int(digit),
             'confidence': confidence,
-            'probabilities': prob_dict
+            'probabilities': {str(i): float(probs[i]) for i in range(10)}
         })
-        
+
     except Exception as e:
-        return jsonify({
-            'error': 'Prediction failed',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': 'Prediction failed', 'message': str(e)}), 500
 
 
 @app.route('/predict_image', methods=['POST'])
 def predict_image():
-    """
-    Predict from base64 encoded image
-    
-    Request JSON:
-        {"image": "base64_encoded_image_data"}
-    
-    The image will be converted to 28x28 grayscale.
-    """
     if model is None:
         return jsonify({'error': 'Model not loaded'}), 500
-    
-    data = request.get_json()
-    
+
+    data = request.get_json(silent=True)
+
     if not data or 'image' not in data:
-        return jsonify({
-            'error': 'Invalid request',
-            'message': 'Please provide JSON with "image" field (base64 encoded)'
-        }), 400
-    
+        return jsonify({'error': 'Invalid request', 'message': 'Please provide JSON with "image" field (base64 encoded)'}), 400
+
     try:
         from PIL import Image
-        
-        # Decode base64 image
+
         image_data = base64.b64decode(data['image'])
         image = Image.open(BytesIO(image_data))
-        
+
         # Convert to grayscale and resize
         image = image.convert('L').resize((28, 28))
-        
-        # Convert to numpy array and normalize
-        pixels = np.array(image).flatten() / 255.0
-        
-        # Invert if needed (MNIST has white digits on black background)
+
+        # Normalize to [0,1]
+        pixels = np.array(image, dtype=np.float32).flatten() / 255.0
+
+        # If background is mostly white, invert so ink becomes 1
         if pixels.mean() > 0.5:
-            pixels = 1 - pixels
-        
-        # Make prediction
-        prediction = model.predict([pixels])[0]
-        probabilities = model.predict_proba([pixels])[0]
-        
+            pixels = 1.0 - pixels
+
+        pixel_array = pixels.reshape(1, 784)
+
+        digit, probs = predict_with_probs(pixel_array)
+        confidence = float(np.max(probs))
+
         return jsonify({
-            'digit': int(prediction) if prediction.isdigit() else prediction,
-            'confidence': float(max(probabilities)),
-            'probabilities': {str(i): float(p) for i, p in enumerate(probabilities)}
+            'digit': int(digit),
+            'confidence': confidence,
+            'probabilities': {str(i): float(probs[i]) for i in range(10)}
         })
-        
+
     except ImportError:
-        return jsonify({
-            'error': 'PIL not installed',
-            'message': 'Image processing requires Pillow. Use /predict endpoint instead.'
-        }), 500
+        return jsonify({'error': 'PIL not installed', 'message': 'pip install pillow (or use /predict with pixels)'}), 500
     except Exception as e:
-        return jsonify({
-            'error': 'Image prediction failed',
-            'message': str(e)
-        }), 500
+        return jsonify({'error': 'Image prediction failed', 'message': str(e)}), 500
 
 
 if __name__ == '__main__':
