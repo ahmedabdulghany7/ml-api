@@ -1,50 +1,27 @@
 """
 MNIST Digit Classification API
-Flask application for serving digit recognition predictions
+Flask application for serving digit recognition predictions (Keras CNN)
 """
 
 from flask import Flask, request, jsonify, render_template_string
-import joblib
 import numpy as np
 import os
 import base64
 from io import BytesIO
 
+# Keras / TensorFlow
+from keras.models import load_model
+
 app = Flask(__name__)
 
 # =========================
-# Model loading (FIXED)
+# Load Keras CNN model
 # =========================
-MODEL_PATH = "mnist_model.pkl"
-
-
-def load_model_any(path: str):
-    """
-    Loads either:
-      - a scikit-learn model directly, OR
-      - a dict that contains the model under common keys (model/clf/pipeline/estimator)
-    """
-    obj = joblib.load(path)
-
-    # If saved as dict (artifacts), extract the actual model
-    if isinstance(obj, dict):
-        for key in ("model", "clf", "pipeline", "estimator"):
-            if key in obj:
-                extracted = obj[key]
-                return extracted
-        # No model found inside dict
-        raise ValueError(
-            f"Loaded a dict from {path} but couldn't find a model under keys "
-            f"['model','clf','pipeline','estimator']. Found keys: {list(obj.keys())}"
-        )
-
-    # Otherwise it is the model itself
-    return obj
-
+MODEL_PATH = "mnist_cnn_model.keras"
 
 try:
-    model = load_model_any(MODEL_PATH)
-    print(f"✅ Model loaded successfully from {MODEL_PATH}: {type(model)}")
+    model = load_model(MODEL_PATH)
+    print(f"✅ Keras CNN model loaded successfully from {MODEL_PATH}")
 except FileNotFoundError:
     print(f"❌ Model file not found at {MODEL_PATH}")
     model = None
@@ -54,62 +31,7 @@ except Exception as e:
 
 
 # =========================
-# Helpers
-# =========================
-def _softmax(x: np.ndarray) -> np.ndarray:
-    """Numerically stable softmax for converting logits to probabilities."""
-    x = x - np.max(x, axis=1, keepdims=True)
-    exp = np.exp(x)
-    return exp / np.sum(exp, axis=1, keepdims=True)
-
-
-def predict_with_probs(pixel_array_784: np.ndarray):
-    """
-    pixel_array_784: shape (1, 784)
-    Returns:
-        pred_digit: int
-        probs: np.ndarray shape (10,)
-    """
-    pred = model.predict(pixel_array_784)[0]
-    pred_digit = int(pred)
-
-    # Best case: sklearn predict_proba
-    if hasattr(model, "predict_proba"):
-        probs = model.predict_proba(pixel_array_784)[0]
-        probs = np.asarray(probs, dtype=np.float64)
-
-        # Sometimes models trained on subset of classes -> pad to 10 if needed
-        if probs.shape[0] != 10 and hasattr(model, "classes_"):
-            full = np.zeros(10, dtype=np.float64)
-            for cls, p in zip(model.classes_, probs):
-                full[int(cls)] = float(p)
-            probs = full
-
-        return pred_digit, probs
-
-    # If decision_function exists, convert logits to probabilities
-    if hasattr(model, "decision_function"):
-        logits = model.decision_function(pixel_array_784)
-        logits = np.asarray(logits, dtype=np.float64)
-        probs = _softmax(logits)[0]
-
-        # Same pad logic if needed
-        if probs.shape[0] != 10 and hasattr(model, "classes_"):
-            full = np.zeros(10, dtype=np.float64)
-            for idx, cls in enumerate(model.classes_):
-                full[int(cls)] = float(probs[idx])
-            probs = full
-
-        return pred_digit, probs
-
-    # Fallback: one-hot
-    probs = np.zeros(10, dtype=np.float64)
-    probs[pred_digit] = 1.0
-    return pred_digit, probs
-
-
-# =========================
-# HTML template
+# HTML template (same UI)
 # =========================
 HOME_TEMPLATE = """
 <!DOCTYPE html>
@@ -225,7 +147,6 @@ HOME_TEMPLATE = """
         const ctx = canvas.getContext('2d');
         let isDrawing = false;
 
-        // Initialize canvas
         ctx.fillStyle = 'white';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.strokeStyle = 'black';
@@ -238,10 +159,6 @@ HOME_TEMPLATE = """
         canvas.addEventListener('mouseup', stopDrawing);
         canvas.addEventListener('mouseout', stopDrawing);
 
-        canvas.addEventListener('touchstart', handleTouch);
-        canvas.addEventListener('touchmove', handleTouch);
-        canvas.addEventListener('touchend', stopDrawing);
-
         function startDrawing(e) { isDrawing = true; draw(e); }
 
         function draw(e) {
@@ -249,20 +166,11 @@ HOME_TEMPLATE = """
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left;
             const y = e.clientY - rect.top;
+
             ctx.lineTo(x, y);
             ctx.stroke();
             ctx.beginPath();
             ctx.moveTo(x, y);
-        }
-
-        function handleTouch(e) {
-            e.preventDefault();
-            const touch = e.touches[0];
-            const mouseEvent = new MouseEvent(
-                e.type === 'touchstart' ? 'mousedown' : 'mousemove',
-                { clientX: touch.clientX, clientY: touch.clientY }
-            );
-            canvas.dispatchEvent(mouseEvent);
         }
 
         function stopDrawing() { isDrawing = false; ctx.beginPath(); }
@@ -280,7 +188,6 @@ HOME_TEMPLATE = """
             tempCanvas.width = 28;
             tempCanvas.height = 28;
             const tempCtx = tempCanvas.getContext('2d');
-
             tempCtx.drawImage(canvas, 0, 0, 28, 28);
 
             const imageData = tempCtx.getImageData(0, 0, 28, 28);
@@ -291,7 +198,7 @@ HOME_TEMPLATE = """
                 const g = imageData.data[i + 1];
                 const b = imageData.data[i + 2];
                 const gray = (r + g + b) / 3;
-                pixels.push((255 - gray) / 255); // invert: white->0, black->1
+                pixels.push((255 - gray) / 255); // invert (white->0, black->1)
             }
 
             try {
@@ -309,7 +216,6 @@ HOME_TEMPLATE = """
                 document.getElementById('confidence').textContent =
                     `Confidence: ${(data.confidence * 100).toFixed(1)}%`;
 
-                // probabilities keys are strings "0".."9"
                 let probHtml = '';
                 for (let i = 0; i < 10; i++) {
                     const prob = data.probabilities[String(i)] || 0;
@@ -328,12 +234,18 @@ HOME_TEMPLATE = """
                 alert('Error: ' + error.message);
             }
         }
+
+        window.predict = predict;
+        window.clearCanvas = clearCanvas;
     </script>
 </body>
 </html>
 """
 
 
+# =========================
+# Routes
+# =========================
 @app.route("/")
 def home():
     return render_template_string(HOME_TEMPLATE)
@@ -345,7 +257,7 @@ def health():
         "status": "healthy",
         "model_loaded": model is not None,
         "model_path": MODEL_PATH,
-        "model_type": str(type(model)) if model is not None else None
+        "model_type": "Keras CNN"
     })
 
 
@@ -354,7 +266,7 @@ def predict():
     if model is None:
         return jsonify({
             "error": "Model not loaded",
-            "message": f"Please ensure {MODEL_PATH} exists and contains a sklearn model (or dict with model key)."
+            "message": f"Please ensure {MODEL_PATH} exists"
         }), 500
 
     data = request.get_json(silent=True)
@@ -372,13 +284,14 @@ def predict():
         }), 400
 
     try:
-        pixel_array = np.array(pixels, dtype=np.float32).reshape(1, 784)
+        x = np.array(pixels, dtype=np.float32).reshape(1, 28, 28, 1)
 
-        digit, probs = predict_with_probs(pixel_array)
+        probs = model.predict(x, verbose=0)[0]
+        digit = int(np.argmax(probs))
         confidence = float(np.max(probs))
 
         return jsonify({
-            "digit": int(digit),
+            "digit": digit,
             "confidence": confidence,
             "probabilities": {str(i): float(probs[i]) for i in range(10)}
         })
@@ -405,20 +318,20 @@ def predict_image():
         image_data = base64.b64decode(data["image"])
         image = Image.open(BytesIO(image_data)).convert("L").resize((28, 28))
 
-        pixels = np.array(image, dtype=np.float32).flatten() / 255.0
+        arr = np.array(image, dtype=np.float32) / 255.0
 
-        # if background mostly white -> invert
-        if pixels.mean() > 0.5:
-            pixels = 1.0 - pixels
+        # invert if mostly white background
+        if arr.mean() > 0.5:
+            arr = 1.0 - arr
 
-        pixel_array = pixels.reshape(1, 784)
+        x = arr.reshape(1, 28, 28, 1)
 
-        digit, probs = predict_with_probs(pixel_array)
-        confidence = float(np.max(probs))
+        probs = model.predict(x, verbose=0)[0]
+        digit = int(np.argmax(probs))
 
         return jsonify({
-            "digit": int(digit),
-            "confidence": confidence,
+            "digit": digit,
+            "confidence": float(np.max(probs)),
             "probabilities": {str(i): float(probs[i]) for i in range(10)}
         })
 
