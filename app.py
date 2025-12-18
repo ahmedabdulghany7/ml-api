@@ -12,7 +12,7 @@ except Exception:
 with open('titanic_model.pkl', 'rb') as file:
     model = pickle.load(file)
 
-PREDICT_HTML = """
+PREDICT_HTML = r"""
 <!doctype html>
 <html lang="en">
 <head>
@@ -21,7 +21,8 @@ PREDICT_HTML = """
   <title>Titanic Survival Prediction</title>
   <style>
     :root{
-      --bg:#0b1220;
+      --bg1:#070b16;
+      --bg2:#0b1220;
       --muted:#aab3c5;
       --text:#e8ecf6;
       --line:rgba(255,255,255,.10);
@@ -29,31 +30,49 @@ PREDICT_HTML = """
       --ok:#22c55e;
       --bad:#ef4444;
       --warn:#f59e0b;
+      --cardTop: rgba(255,255,255,.07);
+      --cardBot: rgba(255,255,255,.03);
     }
 
-    /* ✅ Fix background split: make it fixed full-screen layer */
-    html, body { height:100%; }
+    /* ✅ Important: full height + no weird scroll seams */
+    html, body { height: 100%; }
     body{
       margin:0;
+      min-height:100vh;
       font-family: system-ui, -apple-system, Segoe UI, Arial;
       color:var(--text);
-      background: var(--bg);
+      background: linear-gradient(180deg, var(--bg1), var(--bg2));
       overflow-x:hidden;
+      position: relative;
     }
 
-    .bg{
+    /* ✅ Background layer 1 (fixed) */
+    body::before{
+      content:"";
       position: fixed;
       inset: 0;
       z-index: 0;
+      pointer-events:none;
       background:
-        radial-gradient(1200px 700px at 15% -10%, rgba(56,189,248,.22), transparent 60%),
-        radial-gradient(900px 600px at 95% 15%, rgba(34,197,94,.16), transparent 55%),
-        radial-gradient(900px 600px at 50% 120%, rgba(168,85,247,.10), transparent 60%),
-        linear-gradient(180deg, rgba(255,255,255,.03), transparent 30%, rgba(0,0,0,.25)),
-        var(--bg);
-      transform: translateZ(0); /* helps rendering on some browsers */
+        radial-gradient(900px 600px at 12% 0%, rgba(56,189,248,.22), transparent 60%),
+        radial-gradient(800px 520px at 92% 18%, rgba(34,197,94,.16), transparent 58%),
+        radial-gradient(900px 650px at 50% 120%, rgba(168,85,247,.10), transparent 62%);
+      background-repeat: no-repeat;
     }
 
+    /* ✅ Background layer 2 overlay (fixed) */
+    body::after{
+      content:"";
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      pointer-events:none;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.04), transparent 30%, rgba(0,0,0,.30));
+      background-repeat: no-repeat;
+    }
+
+    /* Content above background */
     .wrap{
       position: relative;
       z-index: 1;
@@ -72,25 +91,26 @@ PREDICT_HTML = """
       padding:10px 12px;border:1px solid var(--line);border-radius:999px;
       background:rgba(255,255,255,.05);color:var(--muted);font-weight:700;
       white-space:nowrap;
-      backdrop-filter: blur(8px);
     }
 
     .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
     @media (max-width: 900px){ .grid{grid-template-columns:1fr;} }
 
     .card{
-      background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+      background: linear-gradient(180deg, var(--cardTop), var(--cardBot));
       border:1px solid var(--line);
       border-radius:18px;
       padding:18px;
       box-shadow: 0 20px 60px rgba(0,0,0,.35);
-      backdrop-filter: blur(10px);
+      /* backdrop-filter: blur(10px); */
     }
+
     .card h2{margin:0 0 10px;font-size:16px}
     .muted{color:var(--muted)}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     @media (max-width: 520px){ .row{grid-template-columns:1fr;} }
     label{display:block;margin:10px 0 6px;font-weight:800;color:#dbe3ff}
+
     input,select{
       width:100%;
       padding:12px 12px;
@@ -105,6 +125,7 @@ PREDICT_HTML = """
       border-color:rgba(56,189,248,.55);
       box-shadow:0 0 0 4px rgba(56,189,248,.12)
     }
+
     .actions{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
     button{
       padding:12px 16px;border:0;border-radius:14px;
@@ -133,15 +154,12 @@ PREDICT_HTML = """
     .kv b{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
     .kv span{font-weight:900}
 
-    ul{margin:10px 0 0;padding-left:18px;color:var(--muted)}
     .footer{margin-top:14px;color:var(--muted);font-size:12px}
     a{color:#8be9ff;text-decoration:none}
     code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:8px;border:1px solid var(--line)}
   </style>
 </head>
 <body>
-  <div class="bg"></div>
-
   <div class="wrap">
     <div class="header">
       <div class="title">
