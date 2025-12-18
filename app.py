@@ -34,7 +34,9 @@ PREDICT_HTML = r"""
       --cardBot: rgba(255,255,255,.03);
     }
 
-    /* ✅ Important: full height + no weird scroll seams */
+    /* ✅ FIX: prevent inputs overlapping inside grid */
+    *, *::before, *::after { box-sizing: border-box; }
+
     html, body { height: 100%; }
     body{
       margin:0;
@@ -46,7 +48,6 @@ PREDICT_HTML = r"""
       position: relative;
     }
 
-    /* ✅ Background layer 1 (fixed) */
     body::before{
       content:"";
       position: fixed;
@@ -60,7 +61,6 @@ PREDICT_HTML = r"""
       background-repeat: no-repeat;
     }
 
-    /* ✅ Background layer 2 overlay (fixed) */
     body::after{
       content:"";
       position: fixed;
@@ -72,7 +72,6 @@ PREDICT_HTML = r"""
       background-repeat: no-repeat;
     }
 
-    /* Content above background */
     .wrap{
       position: relative;
       z-index: 1;
@@ -102,17 +101,28 @@ PREDICT_HTML = r"""
       border-radius:18px;
       padding:18px;
       box-shadow: 0 20px 60px rgba(0,0,0,.35);
-      /* backdrop-filter: blur(10px); */
     }
 
     .card h2{margin:0 0 10px;font-size:16px}
     .muted{color:var(--muted)}
-    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+    /* ✅ FIX: better spacing + prevent grid children overflow */
+    .row{
+      display:grid;
+      grid-template-columns:minmax(0, 1fr) minmax(0, 1fr);
+      column-gap:18px;
+      row-gap:14px;
+    }
     @media (max-width: 520px){ .row{grid-template-columns:1fr;} }
+
+    /* ✅ FIX: very important for CSS Grid */
+    .row > div{ min-width: 0; }
+
     label{display:block;margin:10px 0 6px;font-weight:800;color:#dbe3ff}
 
     input,select{
       width:100%;
+      box-sizing:border-box; /* ✅ extra safety */
       padding:12px 12px;
       border-radius:12px;
       border:1px solid var(--line);
