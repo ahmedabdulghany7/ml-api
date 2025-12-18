@@ -22,7 +22,6 @@ PREDICT_HTML = """
   <style>
     :root{
       --bg:#0b1220;
-      --card:#101a33;
       --muted:#aab3c5;
       --text:#e8ecf6;
       --line:rgba(255,255,255,.10);
@@ -31,15 +30,38 @@ PREDICT_HTML = """
       --bad:#ef4444;
       --warn:#f59e0b;
     }
+
+    /* ✅ Fix background split: make it fixed full-screen layer */
+    html, body { height:100%; }
     body{
       margin:0;
       font-family: system-ui, -apple-system, Segoe UI, Arial;
-      background: radial-gradient(1200px 600px at 20% -10%, rgba(56,189,248,.20), transparent 60%),
-                  radial-gradient(900px 500px at 90% 10%, rgba(34,197,94,.14), transparent 55%),
-                  var(--bg);
       color:var(--text);
+      background: var(--bg);
+      overflow-x:hidden;
     }
-    .wrap{max-width:980px;margin:40px auto;padding:0 16px;}
+
+    .bg{
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(1200px 700px at 15% -10%, rgba(56,189,248,.22), transparent 60%),
+        radial-gradient(900px 600px at 95% 15%, rgba(34,197,94,.16), transparent 55%),
+        radial-gradient(900px 600px at 50% 120%, rgba(168,85,247,.10), transparent 60%),
+        linear-gradient(180deg, rgba(255,255,255,.03), transparent 30%, rgba(0,0,0,.25)),
+        var(--bg);
+      transform: translateZ(0); /* helps rendering on some browsers */
+    }
+
+    .wrap{
+      position: relative;
+      z-index: 1;
+      max-width:980px;
+      margin:40px auto;
+      padding:0 16px;
+    }
+
     .header{
       display:flex;align-items:center;justify-content:space-between;gap:12px;
       margin-bottom:18px;
@@ -50,17 +72,19 @@ PREDICT_HTML = """
       padding:10px 12px;border:1px solid var(--line);border-radius:999px;
       background:rgba(255,255,255,.05);color:var(--muted);font-weight:700;
       white-space:nowrap;
+      backdrop-filter: blur(8px);
     }
 
     .grid{display:grid;grid-template-columns:1.2fr .8fr;gap:14px}
     @media (max-width: 900px){ .grid{grid-template-columns:1fr;} }
 
     .card{
-      background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+      background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
       border:1px solid var(--line);
       border-radius:18px;
       padding:18px;
       box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      backdrop-filter: blur(10px);
     }
     .card h2{margin:0 0 10px;font-size:16px}
     .muted{color:var(--muted)}
@@ -72,12 +96,15 @@ PREDICT_HTML = """
       padding:12px 12px;
       border-radius:12px;
       border:1px solid var(--line);
-      background: rgba(0,0,0,.22);
+      background: rgba(0,0,0,.26);
       color: var(--text);
       outline:none;
     }
     input::placeholder{color:rgba(232,236,246,.45)}
-    input:focus, select:focus{border-color:rgba(56,189,248,.55);box-shadow:0 0 0 4px rgba(56,189,248,.12)}
+    input:focus, select:focus{
+      border-color:rgba(56,189,248,.55);
+      box-shadow:0 0 0 4px rgba(56,189,248,.12)
+    }
     .actions{display:flex;gap:10px;align-items:center;margin-top:14px;flex-wrap:wrap}
     button{
       padding:12px 16px;border:0;border-radius:14px;
@@ -113,6 +140,8 @@ PREDICT_HTML = """
   </style>
 </head>
 <body>
+  <div class="bg"></div>
+
   <div class="wrap">
     <div class="header">
       <div class="title">
@@ -127,7 +156,6 @@ PREDICT_HTML = """
         <h2>Passenger Information</h2>
         <p class="muted" style="margin-top:0">Please enter the passenger features below.</p>
 
-        <!-- ✅ novalidate prevents browser "alerts" style -->
         <form method="POST" action="/predict_page" novalidate>
           <div class="row">
             <div>
